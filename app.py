@@ -134,16 +134,17 @@ def start():
     alts         = data.get("alternateSubcategories") or None
     rounds       = int(data.get("rounds") or 10)
 
-    session["cat"]  = category
-    session["sub"]  = subcategory
-    session["alts"] = alts
-    session["N"]    = rounds
-    session["r"]    = 0
-    session["theta"]= 0.0
-    session["info"] = 0.0
-    session["seen"] = set()  # cannot store set in session directly; store as list
+    session["cat"]   = category
+    session["sub"]   = subcategory
+    session["alts"]  = alts
+    session["N"]     = rounds
+    session["r"]     = 0
+    session["theta"] = 0.0
+    session["info"]  = 0.0
+    session["seen"]  = []          # ✅ use a list here
     session.modified = True
     return jsonify(ok=True)
+
 
 @app.get("/api/next")
 def next_question():
