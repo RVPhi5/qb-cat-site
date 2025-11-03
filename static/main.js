@@ -51,6 +51,13 @@ async function loadNext() {
   if (data.done) {
     game.style.display = "none";
     doneEl.style.display = "block";
+
+    const fs = document.getElementById("finalStats");
+    if (data.se && data.ci) {
+      fs.textContent = `Final θ ≈ ${data.theta}   SE ≈ ${data.se}   95% CI ≈ [${data.ci[0]}, ${data.ci[1]}]`;
+    } else {
+      fs.textContent = `Final θ ≈ ${data.theta}`;
+    }
     return;
   }
   if (data.error) {

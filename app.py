@@ -189,7 +189,25 @@ def next_question():
     seen = set(session.get("seen", []))
 
     if r >= N:
-        return jsonify(done=True)
+        theta = float(session.get("theta", 0.0))
+        info  = float(session.get("info", 0.0))
+        if info > 0:
+            se = 1 / math.sqrt(info)
+            lo, hi = theta - 1.96 * se, theta + 1.96 * se
+            return jsonify(
+                done=True,
+                theta=round(theta, 2),
+                se=round(se, 2),
+                ci=[round(lo, 2), round(hi, 2)]
+            )
+        else:
+            return jsonify(
+                done=True,
+                theta=round(theta, 2),
+                se=None,
+                ci=None
+            )
+
 
     level_idx = _level_from_theta(theta)
     b, mode = _progressive_fetch(level_idx, category, sub, alts, seen)
