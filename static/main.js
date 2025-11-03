@@ -75,7 +75,6 @@ async function loadNext() {
 
 submitBtn.onclick = async () => {
   const answer = ansEl.value.trim();
-  if (!answer) return;
   const res = await postJSON("/api/answer", { answer });
   if (res.prompt) {
     fbEl.innerHTML = "🟡 Prompt — be more specific (or click <code>Mark Correct (Y)</code> if truly right).";
@@ -101,3 +100,10 @@ function showResult(res) {
 }
 
 nextBtn.onclick = loadNext;
+
+ansEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    submitBtn.click();
+  }
+});
