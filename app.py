@@ -1,308 +1,351 @@
+# app.py
 import os
 import json
 import math
-import random
 import time
-from html import unescape
+import random
+from typing import Dict, Any, List, Optional, Tuple
+
+from flask import Flask, request, jsonify, render_template, session, redirect
 from urllib.parse import urlencode
 from urllib.request import urlopen, Request
-from flask import Flask, request, session, jsonify, render_template
+
+# ----------------------
+# Flask setup
+# ----------------------
+app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")  # set FLASK_SECRET in prod
 
 API_RANDOM_BONUS = "https://www.qbreader.org/api/random-bonus"
 API_CHECK_ANSWER = "https://www.qbreader.org/api/check-answer"
-API_CATEGORIES   = "https://www.qbreader.org/api/categories"
 
-app = Flask(__name__, static_folder="static", template_folder="templates")
-app.secret_key = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
+# -----------------------------------------------------------
+# Unified θ table (LEVEL • PART • θ • API difficulty mapping)
+# - "api_diffs": list of QBReader 'difficulties' we can pull
+# - "part_index": 0 (easy), 1 (medium), 2 (hard)
+# Notes:
+# * HS Nationals and College Easy share θ = -1.7 on "easy": we randomize
+# * College Easy Hard (+1.7) ~ Open/College-Nats Medium (+1.6): near-tie logic handles this
+# * For Open/College-Nats rows, api_diffs includes [8, 9] (College Nats or Open)
+# -----------------------------------------------------------
+THETA_ROWS: List[Dict[str, Any]] = [
+    {"level": "Middle School",       "part": "Easy",   "theta": -4.2, "api_diffs": [1], "part_index": 0},
+    {"level": "High School Easy",    "part": "Easy",   "theta": -2.5, "api_diffs": [2], "part_index": 0},
+    {"level": "High School Regular", "part": "Easy",   "theta": -2.0, "api_diffs": [3], "part_index": 0},
+    {"level": "High School Nationals","part":"Easy",   "theta": -1.7, "api_diffs": [5], "part_index": 0},
+    {"level": "College Easy",        "part": "Easy",   "theta": -1.7, "api_diffs": [6], "part_index": 0},
 
-# Levels (select by θ → nearest anchor)
-LEVELS = [
-    ("MS", 1),
-    ("HS-Easy", 2),
-    ("HS-Regular", 3),
-    ("HS-Hard", 4),
-    ("College-Medium", 7),
-    ("College-Regionals", 7),
-    ("College-Nationals", 8),
-    ("Open", 9),
+    {"level": "Middle School",       "part": "Medium", "theta": -1.3, "api_diffs": [1], "part_index": 1},
+    {"level": "College Medium",      "part": "Easy",   "theta": -1.1, "api_diffs": [7], "part_index": 0},
+    {"level": "College Regionals",   "part": "Easy",   "theta": -0.7, "api_diffs": [7], "part_index": 0},
+    {"level": "High School Easy",    "part": "Medium", "theta": -0.5, "api_diffs": [2], "part_index": 1},
+    {"level": "Open / College Nats", "part": "Easy",   "theta": -0.1, "api_diffs": [8, 9], "part_index": 0},
+
+    {"level": "High School Regular", "part": "Medium", "theta":  0.0, "api_diffs": [3], "part_index": 1},
+    {"level": "College Easy",        "part": "Medium", "theta":  0.0, "api_diffs": [6], "part_index": 1},
+    {"level": "High School Nationals","part":"Medium", "theta": +0.6, "api_diffs": [5], "part_index": 1},
+    {"level": "College Medium",      "part": "Medium", "theta": +0.6, "api_diffs": [7], "part_index": 1},
+    {"level": "Middle School",       "part": "Hard",   "theta": +0.7, "api_diffs": [1], "part_index": 2},
+
+    {"level": "College Regionals",   "part": "Medium", "theta": +1.0, "api_diffs": [7], "part_index": 1},
+    {"level": "High School Easy",    "part": "Hard",   "theta": +1.5, "api_diffs": [2], "part_index": 2},
+    {"level": "Open / College Nats", "part": "Medium", "theta": +1.6, "api_diffs": [8, 9], "part_index": 1},
+    {"level": "College Easy",        "part": "Hard",   "theta": +1.7, "api_diffs": [6], "part_index": 2},
+    {"level": "High School Regular", "part": "Hard",   "theta": +2.0, "api_diffs": [3], "part_index": 2},
+
+    {"level": "College Medium",      "part": "Hard",   "theta": +2.3, "api_diffs": [7], "part_index": 2},
+    {"level": "High School Nationals","part":"Hard",   "theta": +2.6, "api_diffs": [5], "part_index": 2},
+    {"level": "College Regionals",   "part": "Hard",   "theta": +2.7, "api_diffs": [7], "part_index": 2},
+    {"level": "Open / College Nats", "part": "Hard",   "theta": +3.3, "api_diffs": [8, 9], "part_index": 2},
 ]
-LEVEL_ANCHOR = {
-    "MS": -2.0, "HS-Easy": -1.2, "HS-Regular": 0.0, "HS-Hard": 0.6,
-    "College-Medium": 1.2, "College-Regionals": 1.6, "College-Nationals": 2.2, "Open": 3.0,
-}
-THETA_STEP = 0.5
-BATCH_N = 20
-MAX_BATCHES = 5
 
-# ---------------- Utilities ----------------
-def _get_json(url, params=None, timeout=15):
+# near-tie window (logits) — if several rows are within min_dist + EPS, choose random among them
+NEAR_TIE_EPS = 0.12
+
+# Rasch-like update
+THETA_STEP = 0.5  # learning rate
+THETA_MIN = -5.0
+THETA_MAX = +5.0
+
+# fetch behavior
+FETCH_RETRIES = 3
+NO_REPEAT_SET_MAX = 5000
+
+# ---------------------------------
+# Helpers: HTTP and parsing
+# ---------------------------------
+def get_json(url: str, params: Dict[str, Any] = None, timeout: int = 15) -> Dict[str, Any]:
     full = url + ("?" + urlencode(params, doseq=True) if params else "")
     with urlopen(Request(full, headers={"User-Agent": "python"}), timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
-def _strip_html(s):
+def check_answer(answerline_html: str, user_answer: str) -> str:
+    params = {"answerline": answerline_html or "", "givenAnswer": user_answer or ""}
+    full = API_CHECK_ANSWER + "?" + urlencode(params, doseq=True)
+    for attempt in range(3):
+        try:
+            with urlopen(Request(full, headers={"User-Agent": "python"}), timeout=12) as resp:
+                j = json.loads(resp.read().decode("utf-8"))
+            return (j or {}).get("directive", "reject")
+        except Exception:
+            time.sleep(0.2 * (attempt + 1))
+    return "reject"
+
+def strip_html(s: str) -> str:
     import re
+    from html import unescape
     return re.sub(r"<[^>]+>", "", unescape(s or ""))
 
-def _check_answer(answerline_html, given):
-    params = {"answerline": answerline_html or "", "givenAnswer": given or ""}
-    try:
-        j = _get_json(API_CHECK_ANSWER, params, timeout=12)
-        return (j or {}).get("directive", "reject")
-    except Exception:
-        return "reject"
+def stable_bonus_key(b: Dict[str, Any]) -> str:
+    set_obj = b.get("set") or {}
+    pkt     = b.get("packet") or {}
+    return f"{set_obj.get('name','?')}|{set_obj.get('year','?')}|{pkt.get('number','?')}|{b.get('number','?')}"
 
-def _bonus_key(b):
-    bid = b.get("id") or b.get("_id")
-    if bid:
-        return str(bid)
-    seto = b.get("set") or {}
-    pkt = b.get("packet") or {}
-    return f"{seto.get('name','?')}|{seto.get('year','?')}|{pkt.get('number','?')}|{b.get('number','?')}"
+def split_bonus(b: Dict[str, Any]) -> Tuple[str, List[str], List[str]]:
+    leadin = b.get("leadin_sanitized")
+    if not leadin:
+        leadin = strip_html(b.get("leadin", "") or "")
+    parts_display = b.get("parts_sanitized") or [strip_html(p) for p in (b.get("parts") or [])]
+    answers_html  = b.get("answers") or b.get("answers_sanitized") or []
+    return leadin, parts_display, answers_html
 
-# ---------------- Fetching ----------------
-def _batched_fetch(level_idx, category, subcat, alts, want_mods, seen):
-    """
-    category=None means 'All' → do NOT send a categories filter.
-    want_mods=True means only take bonuses with difficultyModifiers.
-    """
-    _, api_diff = LEVELS[level_idx]
-    base = {
-        "difficulties": api_diff,
-        "threePartBonuses": True,
-        "standardOnly": True,
-        "number": BATCH_N,
+# ---------------------------------
+# θ selection from table
+# ---------------------------------
+def choose_row_for_theta(theta: float) -> Dict[str, Any]:
+    # find min distance
+    dists = [abs(theta - r["theta"]) for r in THETA_ROWS]
+    min_d = min(dists)
+    # collect all rows that are "within" near-tie of min
+    candidates = [THETA_ROWS[i] for i, d in enumerate(dists) if d <= min_d + NEAR_TIE_EPS]
+    return random.choice(candidates)
+
+# ---------------------------------
+# Session state in Flask session
+# ---------------------------------
+def new_state() -> Dict[str, Any]:
+    return {
+        "theta": 0.0,
+        "info_sum": 0.0,
+        "rounds_total": 12,
+        "rounds_done": 0,
+        "category": None,                 # "All" means None
+        "subcategory": None,
+        "alt_subcats": None,
+        "seen": set(),
+        "last_item": None,                # store data needed for /answer
     }
-    if category:             # only include if not None
-        base["categories"] = category
-    if subcat:
-        base["subcategories"] = subcat
-    if alts:
-        base["alternateSubcategories"] = alts
 
-    for _ in range(MAX_BATCHES):
-        try:
-            bonuses = _get_json(API_RANDOM_BONUS, base).get("bonuses", []) or []
-            pool = []
-            for b in bonuses:
-                if _bonus_key(b) in seen:
-                    continue
-                mods = b.get("difficultyModifiers")
-                has_mods = isinstance(mods, (list, tuple)) and len(mods) > 0
-                if want_mods and not has_mods:
-                    continue
-                pool.append(b)
-            if pool:
-                return random.choice(pool)
-        except Exception:
-            time.sleep(0.25)
-    return None
+def state() -> Dict[str, Any]:
+    s = session.get("game")
+    if not s:
+        s = new_state()
+        session["game"] = s
+    # convert seen to set if serialized as list
+    if isinstance(s.get("seen"), list):
+        s["seen"] = set(s["seen"])
+    return s
 
-def _progressive_fetch(level_idx, category, subcat, alts, seen):
-    """
-    Returns (bonus, mode) with progressive fallbacks:
-      'mods+subcat' → 'any+subcat' → 'any+broad' → 'any+neighbor'
-    """
-    b = _batched_fetch(level_idx, category, subcat, alts, True, seen)
-    if b: return b, "mods+subcat"
+def persist(s: Dict[str, Any]) -> None:
+    # turn set to list for session serialization
+    s2 = dict(s)
+    if isinstance(s2.get("seen"), set):
+        s2["seen"] = list(s2["seen"])
+    session["game"] = s2
 
-    b = _batched_fetch(level_idx, category, subcat, alts, False, seen)
-    if b: return b, "any+subcat"
-
-    b = _batched_fetch(level_idx, None, None, None, False, seen)  # broad
-    if b: return b, "any+broad"
-
-    neighbors = []
-    if level_idx > 0: neighbors.append(level_idx - 1)
-    if level_idx < len(LEVELS) - 1: neighbors.append(level_idx + 1)
-    random.shuffle(neighbors)
-    for li in neighbors:
-        b = _batched_fetch(li, None, None, None, False, seen)
-        if b: return b, "any+neighbor"
-    return None, ""
-
-# ---------------- Bonus parsing ----------------
-def _split_bonus(b):
-    leadin = b.get("leadin_sanitized") or _strip_html(b.get("leadin", ""))
-    parts  = b.get("parts_sanitized") or [_strip_html(p) for p in (b.get("parts") or [])]
-    answers= b.get("answers") or b.get("answers_sanitized") or []
-    return leadin, parts, answers
-
-def _detect_medium_idx_from_mods(b, n):
-    mods = b.get("difficultyModifiers")
-    if isinstance(mods, (list, tuple)) and n > 0:
-        for i, v in enumerate(mods[:n]):
-            if str(v).lower().startswith("m"):
-                return i
-        return 1 if n >= 2 else 0
-    return None
-
-# ---------------- θ & level ----------------
-def _rasch_update(theta, b_anchor, correct):
+# ---------------------------------
+# Rasch update utils
+# ---------------------------------
+def rasch_update(theta: float, b_anchor: float, correct: bool, step: float = THETA_STEP) -> Tuple[float, float]:
+    # 1PL: P(correct) = logistic(theta - b)
     P = 1.0 / (1.0 + math.exp(-(theta - b_anchor)))
-    theta = theta + THETA_STEP * ((1.0 - P) if correct else -P)
-    theta = max(-4.0, min(4.0, theta))
+    if correct:
+        theta += step * (1.0 - P)
+    else:
+        theta -= step * P
+    theta = max(THETA_MIN, min(THETA_MAX, theta))
     return theta, P
 
-def _level_from_theta(theta):
-    best, gap = 0, 9e9
-    for i, (name, _) in enumerate(LEVELS):
-        g = abs(theta - LEVEL_ANCHOR[name])
-        if g < gap:
-            best, gap = i, g
-    return best
+def se_from_info(info_sum: float) -> Optional[float]:
+    if info_sum <= 0:
+        return None
+    return 1.0 / math.sqrt(info_sum)
 
-# ---------------- Routes ----------------
+# ---------------------------------
+# Flask routes
+# ---------------------------------
 @app.route("/")
-def home():
+def index():
     return render_template("index.html")
 
 @app.post("/api/start")
-def start():
-    data = request.get_json(force=True) or {}
+def api_start():
+    payload = request.get_json(force=True) or {}
+    category = payload.get("category")  # "All" allowed
+    if category and category.lower() == "all":
+        category = None
+    subcat   = payload.get("subcategory") or None
+    alts     = payload.get("alternateSubcategories") or None
+    rounds   = int(payload.get("rounds") or 12)
 
-    # 🔄 wipe previous session completely
-    session.clear()
+    s = new_state()
+    s["category"]   = category
+    s["subcategory"]= subcat
+    s["alt_subcats"]= alts
+    s["rounds_total"]= max(1, rounds)
+    s["theta"]      = 0.0
+    s["info_sum"]   = 0.0
+    s["rounds_done"]= 0
+    s["seen"]       = set()
+    s["last_item"]  = None
+    persist(s)
+    return jsonify({"ok": True})
 
-    category_in = (data.get("category") or "").strip()
-    category = None if category_in.lower() == "all" else category_in.title()
-    subcategory = (data.get("subcategory") or None)
-    alts = data.get("alternateSubcategories") or None
-    rounds = int(data.get("rounds") or 10)
-
-    # fresh state
-    session["cat"]   = category
-    session["sub"]   = subcategory
-    session["alts"]  = alts
-    session["N"]     = rounds
-    session["r"]     = 0
-    session["theta"] = 0.0
-    session["info"]  = 0.0
-    session["seen"]  = []
-    session["curr_ans_html"] = ""
-    session["anchor_level"]  = "HS-Regular"
-    session["showLeadin"]    = True
-    session.modified = True
-
-    return jsonify(ok=True)
+def fetch_one_bonus(params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    for _ in range(FETCH_RETRIES):
+        try:
+            data = get_json(API_RANDOM_BONUS, params)
+            arr = data.get("bonuses", []) or []
+            if arr:
+                return random.choice(arr)
+        except Exception:
+            time.sleep(0.2)
+    return None
 
 @app.get("/api/next")
-def next_question():
-    category = session.get("cat")
-    sub = session.get("sub")
-    alts = session.get("alts")
-    r = int(session.get("r", 0))
-    N = int(session.get("N", 10))
-    theta = float(session.get("theta", 0.0))
-    seen = set(session.get("seen", []))
+def api_next():
+    s = state()
+    if s["rounds_done"] >= s["rounds_total"]:
+        # final stats
+        se = se_from_info(s["info_sum"])
+        ci = None
+        if se is not None:
+            lo, hi = s["theta"] - 1.96 * se, s["theta"] + 1.96 * se
+            ci = [round(lo, 2), round(hi, 2)]
+        return jsonify({
+            "done": True,
+            "theta": round(s["theta"], 2),
+            "se": None if se is None else round(se, 2),
+            "ci": ci
+        })
 
-    if r >= N:
-        theta = float(session.get("theta", 0.0))
-        info  = float(session.get("info", 0.0))
-        if info > 0:
-            se = 1 / math.sqrt(info)
-            lo, hi = theta - 1.96 * se, theta + 1.96 * se
-            return jsonify(
-                done=True,
-                theta=round(theta, 2),
-                se=round(se, 2),
-                ci=[round(lo, 2), round(hi, 2)]
-            )
-        else:
-            return jsonify(
-                done=True,
-                theta=round(theta, 2),
-                se=None,
-                ci=None
-            )
+    # choose target row by θ with random tie-breaking
+    row = choose_row_for_theta(s["theta"])
+    api_diff = random.choice(row["api_diffs"])  # handles Open/College Nats choice
+    part_idx = row["part_index"]
 
-
-    level_idx = _level_from_theta(theta)
-    b, mode = _progressive_fetch(level_idx, category, sub, alts, seen)
-    if not b:
-        return jsonify(error="sparse"), 200
-
-    key = _bonus_key(b)
-    seen.add(key)
-
-    leadin, parts, answers = _split_bonus(b)
-    n = min(len(parts), len(answers))
-    if n == 0:
-        return jsonify(error="malformed"), 200
-
-    if mode == "mods+subcat":
-        mid = _detect_medium_idx_from_mods(b, n)
-        idx = (mid if (mid is not None and 0 <= mid < n) else (1 if n >= 2 else 0))
-    else:
-        idx = 1 if n >= 2 else 0
-
-    seto = b.get("set") or {}
-    pkt = b.get("packet") or {}
-    meta = {
-        "set": seto.get("name", "Unknown set"),
-        "year": seto.get("year", "?"),
-        "packet": pkt.get("number", "?"),
-        "qnum": b.get("number", "?"),
+    # Build request to QBReader
+    params = {
+        "number": 1,
+        "difficulties": api_diff,
+        "threePartBonuses": True,
+        "standardOnly": True,
     }
+    if s["category"]:
+        params["categories"] = s["category"]
+    if s["subcategory"]:
+        params["subcategories"] = s["subcategory"]
+    if s["alt_subcats"]:
+        params["alternateSubcategories"] = s["alt_subcats"]
 
-    session["curr_ans_html"] = answers[idx]
-    session["r"] = r + 1
-    session["seen"] = list(seen)
-    session["showLeadin"] = (r % 3 == 0)  # 1st/4th/7th/...
-    session["anchor_level"] = LEVELS[level_idx][0]
-    session.modified = True
+    # Fetch & ensure usable + not repeated
+    for _ in range(8):  # multiple tries to avoid repeats/short items
+        b = fetch_one_bonus(params)
+        if not b:
+            continue
+        key = stable_bonus_key(b)
+        if key in s["seen"]:
+            continue
+        leadin, parts_display, answers_html = split_bonus(b)
+        n = min(len(parts_display), len(answers_html))
+        if n == 0:
+            continue
+        # clip part index if bonus has fewer than 3 parts
+        idx = min(part_idx, max(0, n - 1))
 
-    return jsonify(
-        done=False,
-        mode=mode,
-        showLeadin=session["showLeadin"],
-        leadin=leadin,
-        prompt=parts[idx],
-        meta=meta,
-        level=session["anchor_level"],
-        theta=theta
-    )
+        # record chosen item & lock it in session
+        s["seen"].add(key)
+        s["last_item"] = {
+            "answer_html": answers_html[idx],
+            "b_anchor": row["theta"],   # difficulty we asked
+            "level": row["level"],
+            "part": row["part"],
+            "meta": {
+                "set": (b.get("set") or {}).get("name", "Unknown set"),
+                "year": (b.get("set") or {}).get("year", "?"),
+                "packet": (b.get("packet") or {}).get("number", "?"),
+                "qnum": b.get("number", "?"),
+            },
+            "prompt": parts_display[idx],
+            "leadin": leadin,
+        }
+        persist(s)
+
+        # First of each block of three → show lead-in (client displays if non-empty)
+        show_leadin = ((s["rounds_done"]) % 3 == 0)
+
+        return jsonify({
+            "done": False,
+            "mode": "theta-table",
+            "theta": round(s["theta"], 2),
+            "level": row["level"],
+            "part": row["part"],
+            "meta": s["last_item"]["meta"],
+            "prompt": s["last_item"]["prompt"],
+            "leadin": s["last_item"]["leadin"],
+            "showLeadin": show_leadin
+        })
+
+    # Nothing usable this round
+    return jsonify({"done": False, "error": "sparse"})
 
 @app.post("/api/answer")
-def answer():
-    data = request.get_json(force=True) or {}
-    user = (data.get("answer") or "").strip()
-    override = str(data.get("override") or "").lower().startswith("y")
+def api_answer():
+    s = state()
+    li = s.get("last_item") or {}
+    if not li:
+        return jsonify({"error": "no current question"})
 
-    ans_html = session.get("curr_ans_html", "")
-    theta = float(session.get("theta", 0.0))
-    level_name = session.get("anchor_level", "HS-Regular")
-    b_anchor = LEVEL_ANCHOR.get(level_name, 0.0)
-
-    verdict = _check_answer(ans_html, user)
-    correct = (verdict == "accept")
-
-    if verdict == "prompt" and not override:
-        return jsonify(prompt=True, message="Prompt — be more specific."), 200
+    payload = request.get_json(force=True) or {}
+    answer = payload.get("answer", "")
+    override = str(payload.get("override", "")).strip().lower().startswith("y")
 
     if override:
         correct = True
+        prompt_flag = False
         verdict = "accept"
+    else:
+        verdict = check_answer(li["answer_html"], answer)
+        prompt_flag = (verdict == "prompt")
+        correct = (verdict == "accept")
 
-    theta, P = _rasch_update(theta, b_anchor, correct)
-    info = float(session.get("info", 0.0)) + P * (1 - P)
-    se = (1 / math.sqrt(info)) if info > 0 else float("inf")
-    lo, hi = theta - 1.96 * se, theta + 1.96 * se
+    # Update θ against the selected row's θ (b-anchor)
+    theta_before = s["theta"]
+    theta_after, P = rasch_update(theta_before, li["b_anchor"], correct)
+    s["theta"] = theta_after
+    s["info_sum"] += P * (1 - P)
+    s["rounds_done"] += 1
+    persist(s)
 
-    session["theta"] = theta
-    session["info"] = info
-    session.modified = True
+    # compute stats
+    se = se_from_info(s["info_sum"])
+    ci = None
+    if se is not None:
+        lo, hi = s["theta"] - 1.96 * se, s["theta"] + 1.96 * se
+        ci = [round(lo, 2), round(hi, 2)]
 
-    return jsonify(
-        correct=correct,
-        verdict=verdict,
-        officialAnswer=_strip_html(ans_html),
-        theta=round(theta, 2),
-        se=(round(se, 2) if se != float("inf") else None),
-        ci=[round(lo, 2), round(hi, 2)] if info > 0 else None
-    )
+    return jsonify({
+        "prompt": prompt_flag,
+        "verdict": verdict,
+        "correct": correct,
+        "officialAnswer": strip_html(li["answer_html"]),
+        "theta": round(s["theta"], 2),
+        "se": None if se is None else round(se, 2),
+        "ci": ci
+    })
 
-# Local dev runner (Render uses gunicorn)
+# ----------------------
+# Run locally
+# ----------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
