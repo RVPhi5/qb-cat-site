@@ -5,7 +5,6 @@ const overrideBtn = document.getElementById("override");
 
 const game   = document.getElementById("game");
 const doneEl = document.getElementById("done");
-const labelEl= document.getElementById("label");
 const promptEl=document.getElementById("prompt");
 const metaEl = document.getElementById("meta");
 const leadinEl=document.getElementById("leadin");
@@ -27,13 +26,19 @@ async function getJSON(url) {
 }
 
 startBtn.onclick = async () => {
-  const category = document.getElementById("category").value;
+  const category = document.getElementById("category").value;     // "All" allowed
   const sub      = document.getElementById("subcategory").value.trim() || null;
   const altsTxt  = document.getElementById("alts").value.trim();
   const alts     = altsTxt ? altsTxt.split(",").map(s=>s.trim()).filter(Boolean) : null;
   const rounds   = parseInt(document.getElementById("rounds").value || "12", 10);
 
-  await postJSON("/api/start", { category, subcategory: sub, alternateSubcategories: alts, rounds });
+  await postJSON("/api/start", {
+    category,
+    subcategory: sub,
+    alternateSubcategories: alts,
+    rounds
+  });
+
   game.style.display = "block";
   doneEl.style.display = "none";
   fbEl.textContent = "";
@@ -49,16 +54,20 @@ async function loadNext() {
     return;
   }
   if (data.error) {
-    labelEl.textContent = "Sparsity";
     promptEl.textContent = "No usable item this round. Click Next.";
     metaEl.textContent = "";
     leadinEl.textContent = "";
     return;
   }
-  metaEl.textContent = `[${data.meta.set} • ${data.meta.year} • Packet ${data.meta.packet} • Q#${data.meta.qnum}]  |  Level by θ: ${data.level}  |  θ≈${data.theta.toFixed(2)}  ${data.mode.includes("any") ? " (fallback)" : ""}`;
-  labelEl.textContent = data.label;
-  promptEl.textContent = data.prompt;
+
+  const fallbackTag = data.mode && data.mode.includes("any") ? " (fallback)" : "";
+  metaEl.textContent =
+    `[${data.meta.set} • ${data.meta.year} • Packet ${data.meta.packet} • Q#${data.meta.qnum}]  |  ` +
+    `Level by θ: ${data.level}  |  θ≈${Number(data.theta).toFixed(2)}${fallbackTag}`;
+
   leadinEl.textContent = data.showLeadin && data.leadin ? `Leadin: ${data.leadin}` : "";
+  promptEl.textContent = data.prompt;
+
   fbEl.textContent = "";
   ansEl.value = "";
   ansEl.focus();
@@ -87,7 +96,8 @@ function showResult(res) {
   } else {
     fbEl.innerHTML = `❌ Incorrect. Official: <i>${res.officialAnswer}</i>`;
   }
-  thetaEl.textContent = `θ ≈ ${res.theta}` + (res.se ? `   SE ≈ ${res.se}   95% CI ≈ [${res.ci[0]}, ${res.ci[1]}]` : "");
+  thetaEl.textContent =
+    `θ ≈ ${res.theta}` + (res.se ? `   SE ≈ ${res.se}   95% CI ≈ [${res.ci[0]}, ${res.ci[1]}]` : "");
 }
 
 nextBtn.onclick = loadNext;

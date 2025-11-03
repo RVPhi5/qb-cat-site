@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>QB CAT (Bonuses)</title>
+  <title>Quizbowl CAT</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
@@ -17,13 +17,14 @@
   </style>
 </head>
 <body>
-  <h1>Quizbowl Bonus CAT</h1>
+  <h1>Quizbowl CAT</h1>
 
   <div class="card">
     <h3>Start a session</h3>
     <div class="row">
       <label>Category
         <select id="category">
+          <option selected>All</option>
           <option>History</option><option>Literature</option><option>Science</option>
           <option>Fine Arts</option><option>Geography</option><option>Mythology</option>
           <option>Religion</option><option>Philosophy</option><option>Social Science</option>
@@ -40,15 +41,16 @@
         <input id="rounds" type="number" min="1" value="12" />
       </label>
     </div>
-    <p class="muted">Medium part preferred (via difficulty modifiers). Fallback = second clue.</p>
+    <!-- Hint line removed per request -->
     <button id="startBtn">Start</button>
   </div>
 
   <div id="game" class="card" style="display:none;">
     <div id="meta" class="muted"></div>
     <div id="leadin" class="muted" style="margin:.5rem 0;"></div>
-    <h3 id="label"></h3>
-    <div id="prompt" style="white-space:pre-wrap;"></div>
+
+    <!-- Question title removed per request (no "Medium Part") -->
+    <div id="prompt" style="white-space:pre-wrap; font-size:1.05rem;"></div>
 
     <div class="row" style="margin-top:1rem;">
       <input id="answer" placeholder="Your answer..." style="flex:1;" />
