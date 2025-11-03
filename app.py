@@ -160,22 +160,30 @@ def home():
 @app.post("/api/start")
 def start():
     data = request.get_json(force=True) or {}
+
+    # 🔄 wipe previous session completely
+    session.clear()
+
     category_in = (data.get("category") or "").strip()
-    # "All" → None (no category filter)
     category = None if category_in.lower() == "all" else category_in.title()
     subcategory = (data.get("subcategory") or None)
     alts = data.get("alternateSubcategories") or None
     rounds = int(data.get("rounds") or 10)
 
-    session["cat"] = category
-    session["sub"] = subcategory
-    session["alts"] = alts
-    session["N"] = rounds
-    session["r"] = 0
+    # fresh state
+    session["cat"]   = category
+    session["sub"]   = subcategory
+    session["alts"]  = alts
+    session["N"]     = rounds
+    session["r"]     = 0
     session["theta"] = 0.0
-    session["info"] = 0.0
-    session["seen"] = []       # list (JSON-serializable)
+    session["info"]  = 0.0
+    session["seen"]  = []
+    session["curr_ans_html"] = ""
+    session["anchor_level"]  = "HS-Regular"
+    session["showLeadin"]    = True
     session.modified = True
+
     return jsonify(ok=True)
 
 @app.get("/api/next")
