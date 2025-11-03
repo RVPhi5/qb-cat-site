@@ -102,6 +102,7 @@ submitBtn.onclick = async () => {
 };
 
 overrideBtn.onclick = async () => {
+  overrideBtn.disabled = true;  // 🚫 disable after click
   const answer = ansEl.value.trim();
   const res = await postJSON("/api/answer", { answer, override: "Y" });
   showResult(res);
@@ -144,6 +145,7 @@ async function loadNext() {
     game.style.display = "none";
     doneEl.style.display = "block";
 
+
     const fs = document.getElementById("finalStats");
     if (data.se && data.ci) {
       fs.textContent = `Final θ ≈ ${data.theta}   SE ≈ ${data.se}   95% CI ≈ [${data.ci[0]}, ${data.ci[1]}]`;
@@ -152,6 +154,8 @@ async function loadNext() {
     }
     return;
   }
+  overrideBtn.disabled = false;  // ♻️ re-enable for new question
+
   if (data.error) {
     promptEl.textContent = "No usable item this round. Click Next.";
     metaEl.textContent = "";
