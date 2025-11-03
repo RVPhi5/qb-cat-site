@@ -97,13 +97,22 @@ function showResult(res) {
   }
   thetaEl.textContent =
     `θ ≈ ${res.theta}` + (res.se ? `   SE ≈ ${res.se}   95% CI ≈ [${res.ci[0]}, ${res.ci[1]}]` : "");
+
+  answered = true; // mark question as done
 }
 
 nextBtn.onclick = loadNext;
 
+let answered = false; // track if question has been answered
+
 ansEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     e.preventDefault();
-    submitBtn.click();
+    if (!answered) {
+      submitBtn.click(); // first Enter → submit answer
+    } else {
+      nextBtn.click();   // next Enter → go to next question
+      answered = false;  // reset for next round
+    }
   }
 });
