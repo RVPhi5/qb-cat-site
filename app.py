@@ -269,7 +269,7 @@ def api_next():
             "answer_html": answers_html[idx],
             "b_anchor": row["theta"],   # difficulty we asked
             "level": row["level"],
-            "part": row["part"],
+            "part": row["part"],        # <-- "Easy" / "Medium" / "Hard" from the θ table
             "meta": {
                 "set": (b.get("set") or {}).get("name", "Unknown set"),
                 "year": (b.get("set") or {}).get("year", "?"),
@@ -289,7 +289,8 @@ def api_next():
             "mode": "theta-table",
             "theta": round(s["theta"], 2),
             "level": row["level"],
-            "part": row["part"],
+            "part": row["part"],              # existing
+            "partLabel": row["part"],         # 👈 NEW: send it explicitly for the UI
             "meta": s["last_item"]["meta"],
             "prompt": s["last_item"]["prompt"],
             "leadin": s["last_item"]["leadin"],

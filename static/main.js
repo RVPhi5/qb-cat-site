@@ -164,9 +164,10 @@ async function loadNext() {
   }
 
   const fallbackTag = data.mode && data.mode.includes("any") ? " (fallback)" : "";
+  const partText = data.partLabel ? ` (${data.partLabel})` : "";
   metaEl.textContent =
-    `[${data.meta.set} • ${data.meta.year} • Packet ${data.meta.packet} • Q#${data.meta.qnum}]  |  ` +
-    `Level by θ: ${data.level}  |  θ≈${Number(data.theta).toFixed(2)}${fallbackTag}`;
+  `[${data.meta.set} • ${data.meta.year} • Packet ${data.meta.packet} • Q#${data.meta.qnum}]  |  ` +
+  `Level by θ: ${data.level}${partText}  |  θ≈${Number(data.theta).toFixed(2)}${fallbackTag}`;
 
   leadinEl.textContent = data.showLeadin && data.leadin ? `Leadin: ${data.leadin}` : "";
   promptEl.textContent = data.prompt;
