@@ -234,68 +234,98 @@ def api_next():
     api_diff = random.choice(row["api_diffs"])  # handles Open/College Nats choice
     part_idx = row["part_index"]
 
-    # Build request to QBReader
-    params = {
+    # we'll try two passes:
+    # 1) with hasDifficultyModifiers=True
+    # 2) fallback: without it
+    def attempt_fetch(params):
+        # Fetch & ensure usable + not repeated
+        for _ in range(8):  # multiple tries to avoid repeats/short items
+            b = fetch_one_bonus(params)
+            if not b:
+                continue
+            key = stable_bonus_key(b)
+            if key in s["seen"]:
+                continue
+            leadin, parts_display, answers_html = split_bonus(b)
+            n = min(len(parts_display), len(answers_html))
+            if n == 0:
+                continue
+            # clip part index if bonus has fewer than 3 parts
+            idx = min(part_idx, max(0, n - 1))
+
+            # record chosen item & lock it in session
+            s["seen"].add(key)
+            s["last_item"] = {
+                "answer_html": answers_html[idx],
+                "b_anchor": row["theta"],   # difficulty we asked
+                "level": row["level"],
+                "part": row["part"],        # "Easy" / "Medium" / "Hard" from the θ table
+                "meta": {
+                    "set": (b.get("set") or {}).get("name", "Unknown set"),
+                    "year": (b.get("set") or {}).get("year", "?"),
+                    "packet": (b.get("packet") or {}).get("number", "?"),
+                    "qnum": b.get("number", "?"),
+                },
+                "prompt": parts_display[idx],
+                "leadin": leadin,
+            }
+            persist(s)
+
+            # First of each block of three → show lead-in (client displays if non-empty)
+            show_leadin = ((s["rounds_done"]) % 3 == 0)
+
+            return {
+                "done": False,
+                "mode": "theta-table",
+                "theta": round(s["theta"], 2),
+                "level": row["level"],
+                "part": row["part"],
+                "partLabel": row["part"],  # for "(Easy)" etc.
+                "meta": s["last_item"]["meta"],
+                "prompt": s["last_item"]["prompt"],
+                "leadin": s["last_item"]["leadin"],
+                "showLeadin": show_leadin
+            }
+        return None
+
+    # ---------- 1) primary: require difficulty modifiers ----------
+    params_primary = {
+        "number": 1,
+        "difficulties": api_diff,
+        "threePartBonuses": True,
+        "standardOnly": True,
+        "hasDifficultyModifiers": True,
+    }
+    if s["category"]:
+        params_primary["categories"] = s["category"]
+    if s["subcategory"]:
+        params_primary["subcategories"] = s["subcategory"]
+    if s["alt_subcats"]:
+        params_primary["alternateSubcategories"] = s["alt_subcats"]
+
+    result = attempt_fetch(params_primary)
+    if result is not None:
+        return jsonify(result)
+
+    # ---------- 2) fallback: same query, but WITHOUT hasDifficultyModifiers ----------
+    params_fallback = {
         "number": 1,
         "difficulties": api_diff,
         "threePartBonuses": True,
         "standardOnly": True,
     }
     if s["category"]:
-        params["categories"] = s["category"]
+        params_fallback["categories"] = s["category"]
     if s["subcategory"]:
-        params["subcategories"] = s["subcategory"]
+        params_fallback["subcategories"] = s["subcategory"]
     if s["alt_subcats"]:
-        params["alternateSubcategories"] = s["alt_subcats"]
+        params_fallback["alternateSubcategories"] = s["alt_subcats"]
 
-    # Fetch & ensure usable + not repeated
-    for _ in range(8):  # multiple tries to avoid repeats/short items
-        b = fetch_one_bonus(params)
-        if not b:
-            continue
-        key = stable_bonus_key(b)
-        if key in s["seen"]:
-            continue
-        leadin, parts_display, answers_html = split_bonus(b)
-        n = min(len(parts_display), len(answers_html))
-        if n == 0:
-            continue
-        # clip part index if bonus has fewer than 3 parts
-        idx = min(part_idx, max(0, n - 1))
-
-        # record chosen item & lock it in session
-        s["seen"].add(key)
-        s["last_item"] = {
-            "answer_html": answers_html[idx],
-            "b_anchor": row["theta"],   # difficulty we asked
-            "level": row["level"],
-            "part": row["part"],        # <-- "Easy" / "Medium" / "Hard" from the θ table
-            "meta": {
-                "set": (b.get("set") or {}).get("name", "Unknown set"),
-                "year": (b.get("set") or {}).get("year", "?"),
-                "packet": (b.get("packet") or {}).get("number", "?"),
-                "qnum": b.get("number", "?"),
-            },
-            "prompt": parts_display[idx],
-            "leadin": leadin,
-        }
-        persist(s)
-
-        # First of each block of three → show lead-in (client displays if non-empty)
-        show_leadin = ((s["rounds_done"]) % 3 == 0)
-
-        return jsonify({
-            "done": False,
-            "mode": "theta-table",
-            "theta": round(s["theta"], 2),
-            "level": row["level"],
-            "part": row["part"],              # existing
-            "partLabel": row["part"],         # 👈 NEW: send it explicitly for the UI
-            "meta": s["last_item"]["meta"],
-            "prompt": s["last_item"]["prompt"],
-            "leadin": s["last_item"]["leadin"],
-            "showLeadin": show_leadin
-        })
+    result2 = attempt_fetch(params_fallback)
+    if result2 is not None:
+        # tell the frontend this was the fallback
+        result2["mode"] = "theta-table-fallback"
+        return jsonify(result2)
 
     # Nothing usable this round
     return jsonify({"done": False, "error": "sparse"})
