@@ -36,7 +36,7 @@ THETA_ROWS: List[Dict[str, Any]] = [
     
     {"level": "High School Nationals","part":"Easy",   "theta": -1.3, "api_diffs": [5], "part_index": 0},
     {"level": "College Easy",        "part": "Easy",   "theta": -1.3, "api_diffs": [6], "part_index": 0},
-    {"level": "College Medium",      "part": "Easy",   "theta": -0.7, "api_diffs": [7], "part_index": 0},
+    # {"level": "College Medium",      "part": "Easy",   "theta": -0.7, "api_diffs": [7], "part_index": 0},
     # {"level": "College Regionals",   "part": "Easy",   "theta": -0.7, "api_diffs": [7], "part_index": 0},
     {"level": "High School Easy",    "part": "Medium", "theta": -0.5, "api_diffs": [2], "part_index": 1},
     # {"level": "Open / College Nats", "part": "Easy",   "theta": -0.1, "api_diffs": [8, 9], "part_index": 0},
