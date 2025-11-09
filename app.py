@@ -32,10 +32,10 @@ THETA_ROWS: List[Dict[str, Any]] = [
     {"level": "Middle School",       "part": "Easy",   "theta": -4.2, "api_diffs": [1], "part_index": 0},
     {"level": "High School Easy",    "part": "Easy",   "theta": -2.5, "api_diffs": [2], "part_index": 0},
     {"level": "High School Regular", "part": "Easy",   "theta": -2.0, "api_diffs": [3], "part_index": 0},
-    {"level": "Middle School",       "part": "Medium", "theta": -1.7, "api_diffs": [1], "part_index": 1},
+    # {"level": "Middle School",       "part": "Medium", "theta": -1.7, "api_diffs": [1], "part_index": 1},
     
-    {"level": "High School Nationals","part":"Easy",   "theta": -1.3, "api_diffs": [5], "part_index": 0},
-    {"level": "College Easy",        "part": "Easy",   "theta": -1.3, "api_diffs": [6], "part_index": 0},
+    # {"level": "High School Nationals","part":"Easy",   "theta": -1.3, "api_diffs": [5], "part_index": 0},
+    # {"level": "College Easy",        "part": "Easy",   "theta": -1.3, "api_diffs": [6], "part_index": 0},
     # {"level": "College Medium",      "part": "Easy",   "theta": -0.7, "api_diffs": [7], "part_index": 0},
     # {"level": "College Regionals",   "part": "Easy",   "theta": -0.7, "api_diffs": [7], "part_index": 0},
     {"level": "High School Easy",    "part": "Medium", "theta": -0.5, "api_diffs": [2], "part_index": 1},
@@ -58,18 +58,16 @@ THETA_ROWS: List[Dict[str, Any]] = [
     {"level": "College Regionals",   "part": "Hard",   "theta": +2.7, "api_diffs": [7], "part_index": 2},
     {"level": "Open / College Nats", "part": "Hard",   "theta": +3.3, "api_diffs": [8, 9], "part_index": 2},
 ]
-
-# near-tie window (logits) — if several rows are within min_dist + EPS, choose random among them
+# near-tie window — if several rows are close, choose random among them
 NEAR_TIE_EPS = 0.12
 
 # Rasch-like update
-THETA_STEP = 0.5  # learning rate
+THETA_STEP = 0.5
 THETA_MIN = -5.0
 THETA_MAX = +5.0
 
 # fetch behavior
 FETCH_RETRIES = 3
-NO_REPEAT_SET_MAX = 5000
 
 # ---------------------------------
 # Helpers: HTTP and parsing
@@ -78,6 +76,7 @@ def get_json(url: str, params: Dict[str, Any] = None, timeout: int = 15) -> Dict
     full = url + ("?" + urlencode(params, doseq=True) if params else "")
     with urlopen(Request(full, headers={"User-Agent": "python"}), timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
 
 def check_answer(answerline_html: str, user_answer: str) -> str:
     params = {"answerline": answerline_html or "", "givenAnswer": user_answer or ""}
@@ -91,15 +90,18 @@ def check_answer(answerline_html: str, user_answer: str) -> str:
             time.sleep(0.2 * (attempt + 1))
     return "reject"
 
+
 def strip_html(s: str) -> str:
     import re
     from html import unescape
     return re.sub(r"<[^>]+>", "", unescape(s or ""))
 
+
 def stable_bonus_key(b: Dict[str, Any]) -> str:
     set_obj = b.get("set") or {}
     pkt     = b.get("packet") or {}
     return f"{set_obj.get('name','?')}|{set_obj.get('year','?')}|{pkt.get('number','?')}|{b.get('number','?')}"
+
 
 def split_bonus(b: Dict[str, Any]) -> Tuple[str, List[str], List[str]]:
     leadin = b.get("leadin_sanitized")
@@ -113,10 +115,8 @@ def split_bonus(b: Dict[str, Any]) -> Tuple[str, List[str], List[str]]:
 # θ selection from table
 # ---------------------------------
 def choose_row_for_theta(theta: float) -> Dict[str, Any]:
-    # find min distance
     dists = [abs(theta - r["theta"]) for r in THETA_ROWS]
     min_d = min(dists)
-    # collect all rows that are "within" near-tie of min
     candidates = [THETA_ROWS[i] for i, d in enumerate(dists) if d <= min_d + NEAR_TIE_EPS]
     return random.choice(candidates)
 
@@ -129,35 +129,34 @@ def new_state() -> Dict[str, Any]:
         "info_sum": 0.0,
         "rounds_total": 12,
         "rounds_done": 0,
-        "category": None,                 # "All" means None
+        "category": None,
         "subcategory": None,
         "alt_subcats": None,
         "seen": set(),
-        "last_item": None,                # store data needed for /answer
+        "last_item": None,
     }
+
 
 def state() -> Dict[str, Any]:
     s = session.get("game")
     if not s:
         s = new_state()
         session["game"] = s
-    # convert seen to set if serialized as list
     if isinstance(s.get("seen"), list):
         s["seen"] = set(s["seen"])
     return s
 
+
 def persist(s: Dict[str, Any]) -> None:
-    # turn set to list for session serialization
     s2 = dict(s)
     if isinstance(s2.get("seen"), set):
         s2["seen"] = list(s2["seen"])
     session["game"] = s2
 
 # ---------------------------------
-# Rasch update utils
+# Rasch & scoring utils
 # ---------------------------------
 def rasch_update(theta: float, b_anchor: float, correct: bool, step: float = THETA_STEP) -> Tuple[float, float]:
-    # 1PL: P(correct) = logistic(theta - b)
     P = 1.0 / (1.0 + math.exp(-(theta - b_anchor)))
     if correct:
         theta += step * (1.0 - P)
@@ -166,10 +165,35 @@ def rasch_update(theta: float, b_anchor: float, correct: bool, step: float = THE
     theta = max(THETA_MIN, min(THETA_MAX, theta))
     return theta, P
 
+
 def se_from_info(info_sum: float) -> Optional[float]:
     if info_sum <= 0:
         return None
     return 1.0 / math.sqrt(info_sum)
+
+
+def score_from_theta(theta: float) -> int:
+    # map [-5, +5] to 1..10
+    t = max(-5.0, min(5.0, theta))
+    norm = (t + 5.0) / 10.0
+    score = int(round(norm * 9 + 1))
+    return max(1, min(10, score))
+
+
+def ppb_guesses(theta: float) -> dict:
+    t = max(-5.0, min(5.0, theta))
+
+    def guess(base, slope):
+        return int(round(max(0.0, min(30.0, base + slope * t))))
+
+    return {
+        "middle_school": guess(22, 1.0),
+        "hs_easy":       guess(19, 0.9),
+        "hs_regular":    guess(17, 0.8),
+        "college_1dot":  guess(15, 0.7),
+        "college_2dot":  guess(13, 0.6),
+        "college_3dot":  guess(11, 0.5),
+    }
 
 # ---------------------------------
 # Flask routes
@@ -178,10 +202,11 @@ def se_from_info(info_sum: float) -> Optional[float]:
 def index():
     return render_template("index.html")
 
+
 @app.post("/api/start")
 def api_start():
     payload = request.get_json(force=True) or {}
-    category = payload.get("category")  # "All" allowed
+    category = payload.get("category")
     if category and category.lower() == "all":
         category = None
     subcat   = payload.get("subcategory") or None
@@ -189,17 +214,18 @@ def api_start():
     rounds   = int(payload.get("rounds") or 12)
 
     s = new_state()
-    s["category"]   = category
-    s["subcategory"]= subcat
-    s["alt_subcats"]= alts
+    s["category"]    = category
+    s["subcategory"] = subcat
+    s["alt_subcats"] = alts
     s["rounds_total"]= max(1, rounds)
-    s["theta"]      = 0.0
-    s["info_sum"]   = 0.0
-    s["rounds_done"]= 0
-    s["seen"]       = set()
-    s["last_item"]  = None
+    s["theta"]       = 0.0
+    s["info_sum"]    = 0.0
+    s["rounds_done"] = 0
+    s["seen"]        = set()
+    s["last_item"]   = None
     persist(s)
     return jsonify({"ok": True})
+
 
 def fetch_one_bonus(params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     for _ in range(FETCH_RETRIES):
@@ -212,34 +238,35 @@ def fetch_one_bonus(params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             time.sleep(0.2)
     return None
 
+
 @app.get("/api/next")
 def api_next():
     s = state()
     if s["rounds_done"] >= s["rounds_total"]:
-        # final stats
         se = se_from_info(s["info_sum"])
         ci = None
         if se is not None:
             lo, hi = s["theta"] - 1.96 * se, s["theta"] + 1.96 * se
             ci = [round(lo, 2), round(hi, 2)]
+
+        score10 = score_from_theta(s["theta"])
+        ppb = ppb_guesses(s["theta"])
         return jsonify({
             "done": True,
             "theta": round(s["theta"], 2),
             "se": None if se is None else round(se, 2),
-            "ci": ci
+            "ci": ci,
+            "score10": score10,
+            "ppb_guesses": ppb
         })
 
     # choose target row by θ with random tie-breaking
     row = choose_row_for_theta(s["theta"])
-    api_diff = random.choice(row["api_diffs"])  # handles Open/College Nats choice
+    api_diff = random.choice(row["api_diffs"])
     part_idx = row["part_index"]
 
-    # we'll try two passes:
-    # 1) with hasDifficultyModifiers=True
-    # 2) fallback: without it
-    def attempt_fetch(params):
-        # Fetch & ensure usable + not repeated
-        for _ in range(8):  # multiple tries to avoid repeats/short items
+    def attempt_fetch(params: Dict[str, Any], require_mods: bool) -> Optional[Dict[str, Any]]:
+        for _ in range(8):
             b = fetch_one_bonus(params)
             if not b:
                 continue
@@ -248,18 +275,22 @@ def api_next():
                 continue
             leadin, parts_display, answers_html = split_bonus(b)
             n = min(len(parts_display), len(answers_html))
-            if n == 0:
+            # must have 3 parts
+            if n < 3:
                 continue
-            # clip part index if bonus has fewer than 3 parts
+            if require_mods:
+                mods = b.get("difficultyModifiers")
+                if not (isinstance(mods, list) and len(mods) >= 3):
+                    continue
+
             idx = min(part_idx, max(0, n - 1))
 
-            # record chosen item & lock it in session
             s["seen"].add(key)
             s["last_item"] = {
                 "answer_html": answers_html[idx],
-                "b_anchor": row["theta"],   # difficulty we asked
+                "b_anchor": row["theta"],
                 "level": row["level"],
-                "part": row["part"],        # "Easy" / "Medium" / "Hard" from the θ table
+                "part": row["part"],
                 "meta": {
                     "set": (b.get("set") or {}).get("name", "Unknown set"),
                     "year": (b.get("set") or {}).get("year", "?"),
@@ -271,7 +302,6 @@ def api_next():
             }
             persist(s)
 
-            # First of each block of three → show lead-in (client displays if non-empty)
             show_leadin = ((s["rounds_done"]) % 3 == 0)
 
             return {
@@ -280,7 +310,7 @@ def api_next():
                 "theta": round(s["theta"], 2),
                 "level": row["level"],
                 "part": row["part"],
-                "partLabel": row["part"],  # for "(Easy)" etc.
+                "partLabel": row["part"],
                 "meta": s["last_item"]["meta"],
                 "prompt": s["last_item"]["prompt"],
                 "leadin": s["last_item"]["leadin"],
@@ -288,7 +318,7 @@ def api_next():
             }
         return None
 
-    # ---------- 1) primary: require difficulty modifiers ----------
+    # primary: require difficulty modifiers
     params_primary = {
         "number": 1,
         "difficulties": api_diff,
@@ -303,11 +333,11 @@ def api_next():
     if s["alt_subcats"]:
         params_primary["alternateSubcategories"] = s["alt_subcats"]
 
-    result = attempt_fetch(params_primary)
+    result = attempt_fetch(params_primary, require_mods=True)
     if result is not None:
         return jsonify(result)
 
-    # ---------- 2) fallback: same query, but WITHOUT hasDifficultyModifiers ----------
+    # fallback: same but without modifier requirement
     params_fallback = {
         "number": 1,
         "difficulties": api_diff,
@@ -321,14 +351,13 @@ def api_next():
     if s["alt_subcats"]:
         params_fallback["alternateSubcategories"] = s["alt_subcats"]
 
-    result2 = attempt_fetch(params_fallback)
+    result2 = attempt_fetch(params_fallback, require_mods=False)
     if result2 is not None:
-        # tell the frontend this was the fallback
         result2["mode"] = "theta-table-fallback"
         return jsonify(result2)
 
-    # Nothing usable this round
     return jsonify({"done": False, "error": "sparse"})
+
 
 @app.post("/api/answer")
 def api_answer():
@@ -350,7 +379,6 @@ def api_answer():
         prompt_flag = (verdict == "prompt")
         correct = (verdict == "accept")
 
-    # Update θ against the selected row's θ (b-anchor)
     theta_before = s["theta"]
     theta_after, P = rasch_update(theta_before, li["b_anchor"], correct)
     s["theta"] = theta_after
@@ -358,7 +386,6 @@ def api_answer():
     s["rounds_done"] += 1
     persist(s)
 
-    # compute stats
     se = se_from_info(s["info_sum"])
     ci = None
     if se is not None:
@@ -375,8 +402,6 @@ def api_answer():
         "ci": ci
     })
 
-# ----------------------
-# Run locally
-# ----------------------
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)

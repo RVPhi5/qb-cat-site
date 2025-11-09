@@ -1,27 +1,28 @@
-const startBtn = document.getElementById("startBtn");
-const nextBtn  = document.getElementById("nextBtn");
-const submitBtn= document.getElementById("submit");
-const overrideBtn = document.getElementById("override");
+const startBtn   = document.getElementById("startBtn");
+const nextBtn    = document.getElementById("nextBtn");
+const submitBtn  = document.getElementById("submit");
+const overrideBtn= document.getElementById("override");
 
-const game   = document.getElementById("game");
-const doneEl = document.getElementById("done");
-const promptEl=document.getElementById("prompt");
-const metaEl = document.getElementById("meta");
-const leadinEl=document.getElementById("leadin");
-const ansEl  = document.getElementById("answer");
-const fbEl   = document.getElementById("feedback");
-const thetaEl= document.getElementById("theta");
-let answered = false;
+const game    = document.getElementById("game");
+const doneEl  = document.getElementById("done");
+const promptEl= document.getElementById("prompt");
+const metaEl  = document.getElementById("meta");
+const leadinEl= document.getElementById("leadin");
+const ansEl   = document.getElementById("answer");
+const fbEl    = document.getElementById("feedback");
+const thetaEl = document.getElementById("theta");
 
+let answered = false;  // tracks if current question is already graded
 
 async function postJSON(url, body) {
   const r = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json"},
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {})
   });
   return await r.json();
 }
+
 async function getJSON(url) {
   const r = await fetch(url);
   return await r.json();
@@ -31,10 +32,10 @@ startBtn.onclick = async () => {
   const category = document.getElementById("category").value;
   const sub      = document.getElementById("subcategory").value.trim() || null;
   const altsTxt  = document.getElementById("alts").value.trim();
-  const alts     = altsTxt ? altsTxt.split(",").map(s=>s.trim()).filter(Boolean) : null;
+  const alts     = altsTxt ? altsTxt.split(",").map(s => s.trim()).filter(Boolean) : null;
   const rounds   = parseInt(document.getElementById("rounds").value || "12", 10);
 
-  // 🔄 tell server to reset state
+  // tell server to start a new session
   await postJSON("/api/start", {
     category,
     subcategory: sub,
@@ -42,7 +43,7 @@ startBtn.onclick = async () => {
     rounds
   });
 
-  // 🔄 reset client state/UI
+  // reset UI
   answered = false;
   metaEl.textContent   = "";
   leadinEl.textContent = "";
@@ -59,18 +60,40 @@ startBtn.onclick = async () => {
 
 async function loadNext() {
   const data = await getJSON("/api/next");
+
+  // session done
   if (data.done) {
     game.style.display = "none";
     doneEl.style.display = "block";
 
     const fs = document.getElementById("finalStats");
-    if (data.se && data.ci) {
-      fs.textContent = `Final θ ≈ ${data.theta}   SE ≈ ${data.se}   95% CI ≈ [${data.ci[0]}, ${data.ci[1]}]`;
-    } else {
-      fs.textContent = `Final θ ≈ ${data.theta}`;
+    if (fs) {
+      let txt = `Final θ ≈ ${data.theta}`;
+      if (data.se && data.ci) {
+        txt += `   SE ≈ ${data.se}   95% CI ≈ [${data.ci[0]}, ${data.ci[1]}]`;
+      }
+      // if server ever sends score10 / ppb_guesses, append here
+      if (typeof data.score10 !== "undefined") {
+        txt += `\nScore (1–10): ${data.score10}`;
+      }
+      if (data.ppb_guesses) {
+        txt += `\nPPB guesses:\n` +
+               `• MS: ${data.ppb_guesses.middle_school}\n` +
+               `• HS Easy: ${data.ppb_guesses.hs_easy}\n` +
+               `• HS Regular: ${data.ppb_guesses.hs_regular}\n` +
+               `• 1-dot college: ${data.ppb_guesses.college_1dot}\n` +
+               `• 2-dot college: ${data.ppb_guesses.college_2dot}\n` +
+               `• 3-dot college: ${data.ppb_guesses.college_3dot}`;
+      }
+      fs.textContent = txt;
     }
+
     return;
   }
+
+  // re-enable override for this new question
+  overrideBtn.disabled = false;
+
   if (data.error) {
     promptEl.textContent = "No usable item this round. Click Next.";
     metaEl.textContent = "";
@@ -78,10 +101,13 @@ async function loadNext() {
     return;
   }
 
-  const fallbackTag = data.mode && data.mode.includes("any") ? " (fallback)" : "";
+  // show level + part label, e.g. "High School Regular (Medium)"
+  const fallbackTag = data.mode && data.mode.includes("fallback") ? " (fallback)" : "";
+  const partText = data.partLabel ? ` (${data.partLabel})` : "";
+
   metaEl.textContent =
     `[${data.meta.set} • ${data.meta.year} • Packet ${data.meta.packet} • Q#${data.meta.qnum}]  |  ` +
-    `Level by θ: ${data.level}  |  θ≈${Number(data.theta).toFixed(2)}${fallbackTag}`;
+    `Level by θ: ${data.level}${partText}  |  θ≈${Number(data.theta).toFixed(2)}${fallbackTag}`;
 
   leadinEl.textContent = data.showLeadin && data.leadin ? `Leadin: ${data.leadin}` : "";
   promptEl.textContent = data.prompt;
@@ -89,10 +115,13 @@ async function loadNext() {
   fbEl.textContent = "";
   ansEl.value = "";
   ansEl.focus();
+
+  answered = false;  // reset for this question
 }
 
 submitBtn.onclick = async () => {
-  const answer = ansEl.value.trim();
+  // allow empty submissions now
+  const answer = ansEl.value;
   const res = await postJSON("/api/answer", { answer });
   if (res.prompt) {
     fbEl.innerHTML = "🟡 Prompt — be more specific (or click <code>Mark Correct (Y)</code> if truly right).";
@@ -102,10 +131,11 @@ submitBtn.onclick = async () => {
 };
 
 overrideBtn.onclick = async () => {
-  overrideBtn.disabled = true;  // 🚫 disable after click
-  const answer = ansEl.value.trim();
+  if (overrideBtn.disabled) return;
+  const answer = ansEl.value;
   const res = await postJSON("/api/answer", { answer, override: "Y" });
   showResult(res);
+  overrideBtn.disabled = true;   // disable for this question
 };
 
 function showResult(res) {
@@ -117,64 +147,22 @@ function showResult(res) {
   thetaEl.textContent =
     `θ ≈ ${res.theta}` + (res.se ? `   SE ≈ ${res.se}   95% CI ≈ [${res.ci[0]}, ${res.ci[1]}]` : "");
 
-  answered = true; // mark question as done
+  answered = true;  // now Enter should go to next
 }
 
 nextBtn.onclick = async () => {
-  answered = false;    // reset for next question when clicking Next
+  answered = false;
   await loadNext();
 };
 
-// ✅ keep only this one declaration (the earlier one at the top)
+// Enter = submit first, then next
 ansEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     e.preventDefault();
     if (!answered) {
-      submitBtn.click(); // first Enter → submit
+      submitBtn.click();
     } else {
-      nextBtn.click();   // next Enter → go to next
-      answered = false;  // reset for the following round
+      nextBtn.click();
     }
   }
 });
-
-// Also reset when a new item loads
-async function loadNext() {
-  const data = await getJSON("/api/next");
-  if (data.done) {
-    game.style.display = "none";
-    doneEl.style.display = "block";
-
-
-    const fs = document.getElementById("finalStats");
-    if (data.se && data.ci) {
-      fs.textContent = `Final θ ≈ ${data.theta}   SE ≈ ${data.se}   95% CI ≈ [${data.ci[0]}, ${data.ci[1]}]`;
-    } else {
-      fs.textContent = `Final θ ≈ ${data.theta}`;
-    }
-    return;
-  }
-  overrideBtn.disabled = false;  // ♻️ re-enable for new question
-
-  if (data.error) {
-    promptEl.textContent = "No usable item this round. Click Next.";
-    metaEl.textContent = "";
-    leadinEl.textContent = "";
-    return;
-  }
-
-  const fallbackTag = data.mode && data.mode.includes("any") ? " (fallback)" : "";
-  const partText = data.partLabel ? ` (${data.partLabel})` : "";
-  metaEl.textContent =
-  `[${data.meta.set} • ${data.meta.year} • Packet ${data.meta.packet} • Q#${data.meta.qnum}]  |  ` +
-  `Level by θ: ${data.level}${partText}  |  θ≈${Number(data.theta).toFixed(2)}${fallbackTag}`;
-
-  leadinEl.textContent = data.showLeadin && data.leadin ? `Leadin: ${data.leadin}` : "";
-  promptEl.textContent = data.prompt;
-
-  fbEl.textContent = "";
-  ansEl.value = "";
-  ansEl.focus();
-
-  answered = false;   // ✅ reset here too on every new item
-}
