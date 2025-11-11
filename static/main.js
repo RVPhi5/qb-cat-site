@@ -68,28 +68,37 @@ async function loadNext() {
 
     const fs = document.getElementById("finalStats");
     if (fs) {
-      let txt = `Final θ ≈ ${data.theta}`;
+      // base line (θ, SE, CI)
+      let html = `Final θ ≈ ${data.theta}`;
       if (data.se && data.ci) {
-        txt += `   SE ≈ ${data.se}   95% CI ≈ [${data.ci[0]}, ${data.ci[1]}]`;
+        html += ` SE ≈ ${data.se} 95% CI ≈ [${data.ci[0]}, ${data.ci[1]}]`;
       }
-      // if server ever sends score10 / ppb_guesses, append here
+
+      // score on its own line, bigger and black
       if (typeof data.score10 !== "undefined") {
-        txt += `\nScore (1–10): ${data.score10}`;
+        html += `<div style="margin-top:0.75rem; font-size:1.2rem; font-weight:600; color:#000;">
+          Score (1–10): ${data.score10}
+        </div>`;
       }
+
+      // ppb guesses each on its own line
       if (data.ppb_guesses) {
-        txt += `\nPPB guesses:\n` +
-               `• MS: ${data.ppb_guesses.middle_school}\n` +
-               `• HS Easy: ${data.ppb_guesses.hs_easy}\n` +
-               `• HS Regular: ${data.ppb_guesses.hs_regular}\n` +
-               `• 1-dot college: ${data.ppb_guesses.college_1dot}\n` +
-               `• 2-dot college: ${data.ppb_guesses.college_2dot}\n` +
-               `• 3-dot college: ${data.ppb_guesses.college_3dot}`;
+        html += `<div style="margin-top:0.75rem; line-height:1.4;">`;
+        html += `<div>MS: ${data.ppb_guesses.middle_school}</div>`;
+        html += `<div>HS Easy: ${data.ppb_guesses.hs_easy}</div>`;
+        html += `<div>HS Regular: ${data.ppb_guesses.hs_regular}</div>`;
+        html += `<div>1-dot college: ${data.ppb_guesses.college_1dot}</div>`;
+        html += `<div>2-dot college: ${data.ppb_guesses.college_2dot}</div>`;
+        html += `<div>3-dot college: ${data.ppb_guesses.college_3dot}</div>`;
+        html += `</div>`;
       }
-      fs.textContent = txt;
+
+      fs.innerHTML = html;
     }
 
     return;
   }
+
 
   // re-enable override for this new question
   overrideBtn.disabled = false;
