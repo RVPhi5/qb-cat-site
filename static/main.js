@@ -13,6 +13,107 @@ const fbEl    = document.getElementById("feedback");
 const thetaEl = document.getElementById("theta");
 
 let answered = false;  // tracks if current question is already graded
+// Dependent dropdown options
+const CATEGORY_MAP = {
+  "Literature": {
+    sub: [
+      "All",
+      "American Literature", "British Literature", "Classical Literature",
+      "European Literature", "World Literature", "Other Literature"
+    ],
+    alt: [
+      "All",
+      "Drama", "Long Fiction", "Poetry", "Short Fiction", "Misc Literature"
+    ]
+  },
+  "History": {
+    sub: [
+      "All",
+      "American History", "Ancient History", "European History",
+      "World History", "Other History"
+    ],
+    alt: ["All"]        // no alternates shown in your sheet
+  },
+  "Science": {
+    sub: [
+      "All",
+      "Biology", "Chemistry", "Physics", "Other Science"
+    ],
+    alt: [
+      "All",
+      "Math", "Astronomy", "Computer Science", "Earth Science",
+      "Engineering", "Misc Science"
+    ]
+  },
+  "Fine Arts": {
+    sub: [
+      "All",
+      "Visual Fine Arts", "Auditory Fine Arts", "Other Fine Arts"
+    ],
+    alt: [
+      "All",
+      "Architecture", "Dance", "Film", "Jazz", "Musicals",
+      "Opera", "Photography", "Misc Arts"
+    ]
+  },
+  "Religion":      { sub: ["All"], alt: ["All"] },
+  "Mythology":     { sub: ["All"], alt: ["All"] },
+  "Philosophy":    { sub: ["All"], alt: ["All"] },
+  "Social Science": {
+    sub: ["All"],   // your sheet only shows alternates
+    alt: [
+      "All",
+      "Anthropology", "Economics", "Linguistics",
+      "Psychology", "Sociology", "Other Social Science"
+    ]
+  },
+  "Trash": {        // Pop culture
+    sub: [
+      "All",
+      "Movies", "Music", "Sports", "Television", "Video Games",
+      "Other Pop Culture"
+    ],
+    alt: ["All"]    // no alternates in your sheet
+  }
+};
+function fillSelect(selectEl, options) {
+  selectEl.innerHTML = "";
+  for (const label of options) {
+    const opt = document.createElement("option");
+    opt.textContent = label;
+    opt.value = label;
+    selectEl.appendChild(opt);
+  }
+  selectEl.value = "All";
+}
+const categoryEl = document.getElementById("category");
+const subEl      = document.getElementById("subcategory");
+const altsEl     = document.getElementById("alts");
+
+function refreshDependentSelects() {
+  const cat = categoryEl.value;
+  if (cat === "All") {
+    // disable & reset when Category = All
+    subEl.disabled = true;
+    altsEl.disabled = true;
+    fillSelect(subEl, ["All"]);
+    fillSelect(altsEl, ["All"]);
+    return;
+  }
+  // enable and populate from map
+  const cfg = CATEGORY_MAP[cat] || { sub: ["All"], alt: ["All"] };
+  subEl.disabled = false;
+  altsEl.disabled = false;
+  fillSelect(subEl, cfg.sub);
+  fillSelect(altsEl, cfg.alt);
+}
+
+// initial state
+refreshDependentSelects();
+
+// on change
+categoryEl.addEventListener("change", refreshDependentSelects);
+
 
 async function postJSON(url, body) {
   const r = await fetch(url, {
@@ -29,13 +130,16 @@ async function getJSON(url) {
 }
 
 startBtn.onclick = async () => {
-  const category = document.getElementById("category").value;
-  const sub      = document.getElementById("subcategory").value.trim() || null;
-  const altsTxt  = document.getElementById("alts").value.trim();
-  const alts     = altsTxt ? altsTxt.split(",").map(s => s.trim()).filter(Boolean) : null;
-  const rounds   = parseInt(document.getElementById("rounds").value || "12", 10);
+  const category = categoryEl.value; // "All" allowed
+  const subVal   = subEl.value;      // now a select
+  const altVal   = altsEl.value;     // now a select
 
-  // tell server to start a new session
+  const sub  = (subVal && subVal !== "All") ? subVal : null;
+  // backend used to accept a list; we'll still send an array if not "All"
+  const alts = (altVal && altVal !== "All") ? [altVal] : null;
+
+  const rounds = parseInt(document.getElementById("rounds").value || "12", 10);
+
   await postJSON("/api/start", {
     category,
     subcategory: sub,
@@ -128,6 +232,7 @@ async function loadNext() {
   answered = false;  // reset for this question
 }
 
+
 submitBtn.onclick = async () => {
   // allow empty submissions now
   const answer = ansEl.value;
@@ -175,3 +280,5 @@ ansEl.addEventListener("keydown", (e) => {
     }
   }
 });
+
+
